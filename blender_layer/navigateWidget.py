@@ -1,11 +1,5 @@
-from PyQt5.QtCore import QRunnable, Qt, pyqtSignal, QSize, QPointF, QRectF
-from PyQt5.QtGui import QPainter, QBrush, QColor, QIcon, QPalette, QCursor
 import sys, math
-from PyQt5.QtWidgets import (
-    QWidget,
-    QSizePolicy,
-    QApplication
-)
+from .qt import QPointF, QRectF, QSize, Qt, pyqtSignal, QBrush, QColor, QCursor, QIcon, QPainter, QPalette, QApplication, QSizePolicy, QWidget, eventPos
 
 class Axis():
     def __init__(self, x, y, z, color, name):
@@ -27,8 +21,8 @@ class NavigateWidget(QWidget):
         super().__init__(*args, **kwargs)
 
         self.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Fixed
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed
         )
         self.setMouseTracking(True)
         self.highlight = 0
@@ -54,28 +48,28 @@ class NavigateWidget(QWidget):
         
     def mousePressEvent(self, event, fullscreenMode = False):
         self.fullscreenMode = fullscreenMode
-        if event.buttons() == Qt.LeftButton or event.buttons() == Qt.MidButton:
+        if event.buttons() == Qt.MouseButton.LeftButton or event.buttons() == Qt.MouseButton.MiddleButton:
             event.accept()
-            self.highlight = self.getHighlight(event.pos())
+            self.highlight = self.getHighlight(eventPos(event))
             if self.highlight < 2:
-                if (event.modifiers() & Qt.ShiftModifier) == Qt.ShiftModifier:
+                if (event.modifiers() & Qt.KeyboardModifier.ShiftModifier) == Qt.KeyboardModifier.ShiftModifier:
                     self.highlight = 3
-                elif (event.modifiers() & Qt.ControlModifier) == Qt.ControlModifier:
+                elif (event.modifiers() & Qt.KeyboardModifier.ControlModifier) == Qt.KeyboardModifier.ControlModifier:
                     self.highlight = 2  
-            self.dragStartPos = QPointF(event.pos())
+            self.dragStartPos = QPointF(eventPos(event))
             self.dragStartVal = QPointF(self.rotation)
                 
             if self.highlight == 4:
                 self.ortho = not self.ortho
                 self.orthoSignal.emit(self.ortho)
             else:
-                self.grabMouse(QCursor(Qt.SizeVerCursor if self.highlight == 2 else (Qt.SizeAllCursor if self.highlight == 3 else Qt.BlankCursor)))
+                self.grabMouse(QCursor(Qt.CursorShape.SizeVerCursor if self.highlight == 2 else (Qt.CursorShape.SizeAllCursor if self.highlight == 3 else Qt.CursorShape.BlankCursor)))
             self.update()
-        elif event.buttons() == Qt.RightButton:
+        elif event.buttons() == Qt.MouseButton.RightButton:
             event.accept()
-            self.dragStartPos = QPointF(event.pos())
+            self.dragStartPos = QPointF(eventPos(event))
             self.dragStartVal = QPointF(0, 0)
-            self.grabMouse(QCursor(Qt.SizeAllCursor))
+            self.grabMouse(QCursor(Qt.CursorShape.SizeAllCursor))
             self.highlight = 3
             self.update()
         else:
@@ -84,13 +78,13 @@ class NavigateWidget(QWidget):
     def mouseReleaseEvent(self, event):
         event.accept()
         self.releaseMouse()
-        self.highlight = self.getHighlight(event.pos())
+        self.highlight = self.getHighlight(eventPos(event))
         self.update()
         self.fullscreenMode = False
         
     def mouseMoveEvent(self, event):
-        highlight = self.getHighlight(event.pos())
-        if event.buttons() == Qt.LeftButton or event.buttons() == Qt.MidButton or event.buttons() == Qt.RightButton:
+        highlight = self.getHighlight(eventPos(event))
+        if event.buttons() == Qt.MouseButton.LeftButton or event.buttons() == Qt.MouseButton.MiddleButton or event.buttons() == Qt.MouseButton.RightButton:
             if self.highlight == 0:
                 self.highlight = 1 if highlight == 0 else highlight  
                 
@@ -98,7 +92,7 @@ class NavigateWidget(QWidget):
             h = self.geometry().height()
             m = min(w, h)
                     
-            pos = event.pos()
+            pos = eventPos(event)
             delta = pos - self.dragStartPos
             delta = QPointF((delta.x() + w / 2) % w - w / 2, (delta.y() + h / 2) % h - h / 2)
             delta = delta / m
@@ -195,7 +189,7 @@ class NavigateWidget(QWidget):
         center = QPointF(w * 0.5, h * 0.5)
         
         brush = QBrush()
-        brush.setStyle(Qt.SolidPattern)
+        brush.setStyle(Qt.BrushStyle.SolidPattern)
         
         pen = painter.pen()
         pen.setWidthF(2)
@@ -207,8 +201,8 @@ class NavigateWidget(QWidget):
         painter.setFont(font)
 
         #painter.begin(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
         
         if self.highlight == 1:
             painter.setBrush(self.palette().light())
@@ -220,7 +214,7 @@ class NavigateWidget(QWidget):
             axis = [Axis(1, 0, 0, QColor(97, 97, 97, 255), 'X'), Axis(0, 1, 0, QColor(187, 187, 187, 255), 'Y'), Axis(0, 0, 1, QColor(123, 123, 123, 255), 'Z')]
         axis = list(map(self.rotateAxis, axis))
         axis.sort(key=lambda a: abs(a.z))
-        background = self.palette().color(QPalette.Window)
+        background = self.palette().color(QPalette.ColorRole.Window)
             
         for a in axis:
             f = ((a.z if a.z <= 0 else -a.z) + 1) / 2 * 0.5 + 0.5
@@ -232,7 +226,7 @@ class NavigateWidget(QWidget):
                 painter.setPen(pen)
                 painter.drawLine(center, p);
             
-                painter.setPen(Qt.NoPen)
+                painter.setPen(Qt.PenStyle.NoPen)
                 brush.setColor(c)
                 painter.setBrush(brush)
                 painter.drawEllipse(p, r, r);
@@ -240,7 +234,7 @@ class NavigateWidget(QWidget):
                 pen.setColor(QColor('black'))
                 painter.setPen(pen)
                 rect = QRectF(p.x() - r, p.y() - r - 1, r * 2, r * 2)
-                painter.drawText(rect, Qt.AlignCenter, a.name)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, a.name)
             else:
                 p = center + QPointF(r2 * -a.x, r2 * a.y)
 
@@ -261,7 +255,7 @@ class NavigateWidget(QWidget):
                 painter.setPen(pen)
                 painter.drawLine(center, p);
             
-                painter.setPen(Qt.NoPen)
+                painter.setPen(Qt.PenStyle.NoPen)
                 brush.setColor(c)
                 painter.setBrush(brush)
                 painter.drawEllipse(p, r, r);
@@ -269,7 +263,7 @@ class NavigateWidget(QWidget):
                 pen.setColor(QColor('black'))
                 painter.setPen(pen)
                 rect = QRectF(p.x() - r, p.y() - r - 1, r * 2, r * 2)
-                painter.drawText(rect, Qt.AlignCenter, a.name)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, a.name)
             else:
                 p = center + QPointF(r2 * -a.x, r2 * a.y)
 
@@ -280,7 +274,7 @@ class NavigateWidget(QWidget):
                 painter.drawEllipse(p, r - 2, r - 2)     
             
             
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         brush = self.palette().base()
         painter.setBrush(brush)
         s = r3 * 1.15
@@ -290,7 +284,7 @@ class NavigateWidget(QWidget):
         if self.highlight == 2:
             painter.setBrush(self.palette().light())
         painter.drawEllipse(QPointF(x, y), r3, r3);
-        instance.icon('tool_zoom').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        instance.icon('tool_zoom').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignmentFlag.AlignCenter, QIcon.Mode.Normal if self.isEnabled() else QIcon.Mode.Disabled)
         if self.highlight == 2:
             painter.setBrush(brush)
 
@@ -298,7 +292,7 @@ class NavigateWidget(QWidget):
         if self.highlight == 3:
             painter.setBrush(self.palette().light())
         painter.drawEllipse(QPointF(x, y), r3, r3);
-        instance.icon('tool_pan').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        instance.icon('tool_pan').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignmentFlag.AlignCenter, QIcon.Mode.Normal if self.isEnabled() else QIcon.Mode.Disabled)
         if self.highlight == 3:
             painter.setBrush(brush)
             
@@ -306,4 +300,4 @@ class NavigateWidget(QWidget):
             painter.setBrush(self.palette().light())
         y = h * 0.5 + r3 * 1.5 + m * 0.1
         painter.drawEllipse(QPointF(x, y), r3, r3);
-        instance.icon('krita_tool_grid' if (self.ortho) else 'tool_perspectivegrid').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        instance.icon('krita_tool_grid' if (self.ortho) else 'tool_perspectivegrid').paint(painter, int(x - s * 0.5), int(y - s * 0.5), s2, s2, Qt.AlignmentFlag.AlignCenter, QIcon.Mode.Normal if self.isEnabled() else QIcon.Mode.Disabled)

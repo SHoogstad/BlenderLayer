@@ -1,7 +1,6 @@
 import subprocess, time, socket, sys, math, struct, pickle, errno  
 from multiprocessing import shared_memory, SimpleQueue
-from PyQt5.QtCore import QRunnable, QObject, pyqtSignal, QByteArray
-from PyQt5.QtGui import QImage
+from .qt import QRunnable, QObject, pyqtSignal, QByteArray, QImage
 
 def sendObj(conn, obj):
     msg = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
@@ -204,9 +203,9 @@ class BlenderLayerServer(QRunnable):
                                         elif msg[0] == 'updateFromFile' or msg[0] == 'updateFrameFromFile':
                                             frame = QImage(msg[3])
                                             if format == 'RGBA8':
-                                                frame = frame.convertToFormat(QImage.Format_RGBA8888)
+                                                frame = frame.convertToFormat(QImage.Format.Format_RGBA8888)
                                             elif format == 'RGBA16':
-                                                frame = frame.convertToFormat(QImage.Format_RGBA64)
+                                                frame = frame.convertToFormat(QImage.Format.Format_RGBA64)
                                             elif format == 'RGBA16F':
                                                 #frame = frame.convertToFormat(QImage.Format_RGBA16FPx4)
                                                 self.signals.error.emit(i18n("Warning: Float format conversion not supported"))
@@ -229,7 +228,7 @@ class BlenderLayerServer(QRunnable):
                                                     if x > 0 or y > 0 or w < d.width() or h < d.height():
                                                         l.setPixelData(QByteArray(bytes(d.width() * d.height() * 4)), 0, 0, d.width(), d.height())
 
-                                                l.setPixelData(QByteArray.fromRawData(bits.asarray(frame.sizeInBytes())), x, y, w, h)
+                                                l.setPixelData(QByteArray(bits.asstring(frame.sizeInBytes())), x, y, w, h)
                                                 if locked:
                                                     refresh = True
                                                 else:

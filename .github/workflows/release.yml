@@ -1,0 +1,27 @@
+# Push a tag "v<version>" matching blender_layer/version.py to publish a release.
+# The auto-updater in the plugin picks up the latest (non pre-release) release with a .zip asset.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check tag matches version
+        run: python scripts/package.py check-tag "$GITHUB_REF_NAME"
+      - name: Build package
+        run: python scripts/package.py
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Blender Layer $GITHUB_REF_NAME" --generate-notes
