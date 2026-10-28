@@ -57,11 +57,13 @@ class BlenderLayer(DockWidget):
         updateNoticeButton = QPushButton(i18n("Install"))
         updateNoticeButton.setToolTip(i18n("Download and install the new version.\nKrita has to be restarted afterwards"))
         updateNoticeHBoxLayout = QHBoxLayout()
-        updateNoticeHBoxLayout.setContentsMargins(0, 0, 0, 0)
         updateNoticeHBoxLayout.addWidget(updateNoticeLabel, 1)
         updateNoticeHBoxLayout.addWidget(updateNoticeButton)
         updateNotice = QWidget()
         updateNotice.setLayout(updateNoticeHBoxLayout)
+        margins = updateNoticeHBoxLayout.contentsMargins()
+        margins.setBottom(0)
+        updateNoticeHBoxLayout.setContentsMargins(margins)
         updateNotice.hide()
 
         settingsHBoxLayout = QHBoxLayout()
@@ -367,7 +369,6 @@ class BlenderLayer(DockWidget):
         libraryGroupBox.setLayout(libraryVBoxLayout)
                
         vboxlayout = QVBoxLayout()
-        vboxlayout.addWidget(updateNotice)
         vboxlayout.addWidget(connectionGroupBox)
         vboxlayout.addLayout(viewHBoxLayout)
         vboxlayout.addWidget(renderGroupBox)
@@ -380,7 +381,16 @@ class BlenderLayer(DockWidget):
         vboxlayout.addStretch(1)
         vboxlayout.addLayout(settingsHBoxLayout)
         scrollContainer.setLayout(vboxlayout)
-        self.setWidget(scroll)
+
+        # The update notice sits outside uiContainer, which is disabled while no document is open
+        dockVBoxLayout = QVBoxLayout()
+        dockVBoxLayout.setContentsMargins(0, 0, 0, 0)
+        dockVBoxLayout.setSpacing(0)
+        dockVBoxLayout.addWidget(updateNotice)
+        dockVBoxLayout.addWidget(scroll, 1)
+        dockContainer = QWidget()
+        dockContainer.setLayout(dockVBoxLayout)
+        self.setWidget(dockContainer)
         
         self.progress = updateProgress
         self.updateNotice = updateNotice
@@ -521,7 +531,7 @@ class BlenderLayer(DockWidget):
 
     def onUpdateFailed(self, error):
         # Failed checks at startup stay silent, only a failed install the user started is shown
-        if self.updateNotice.isVisibleTo(self.uiContainer):
+        if self.updateNotice.isVisibleTo(self):
             self.updateNoticeLabel.setText(i18n("Update failed: {0}").format(error))
             self.updateNoticeButton.setEnabled(True)
 

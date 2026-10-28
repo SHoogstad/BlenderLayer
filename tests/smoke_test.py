@@ -100,8 +100,11 @@ dock = BlenderLayer()
 dock.show()
 app.processEvents()
 check('docker built', dock.uiContainer is not None)
-check('update notice shown', waitFor(lambda: dock.updateNotice.isVisibleTo(dock.uiContainer)), dock.updateNoticeLabel.text())
+check('update notice shown', waitFor(lambda: dock.updateNotice.isVisibleTo(dock)), dock.updateNoticeLabel.text())
 check('update notice text', 'v9.9.9' in dock.updateNoticeLabel.text(), dock.updateNoticeLabel.text())
+dock.canvasChanged(None)
+check('install enabled without document', not dock.uiContainer.isEnabled() and dock.updateNoticeButton.isEnabled())
+dock.uiContainer.setEnabled(True)
 
 for mode in (2, 1, 0):
     dock.viewModeChanged(mode)
@@ -259,6 +262,15 @@ dock.installUpdate()
 check('update installed', waitFor(lambda: updater.restartRequired), dock.updateNoticeLabel.text())
 check('update files', (pykrita / 'blender_layer' / 'version.py').read_bytes() == packageFiles['blender_layer/version.py'] and (pykrita / 'blender_layer.desktop').exists())
 check('restart notice', 'Restart Krita' in dock.updateNoticeLabel.text(), dock.updateNoticeLabel.text())
+
+# A second install replaces the folder, files dropped from the release are removed
+stale = pykrita / 'blender_layer' / 'stale.py'
+stale.write_bytes(b'')
+updater.restartRequired = False
+dock.installUpdate()
+check('reinstalled', waitFor(lambda: updater.restartRequired), dock.updateNoticeLabel.text())
+check('stale files removed', not stale.exists() and (pykrita / 'blender_layer' / 'version.py').exists())
+check('no staging left', sorted(p.name for p in pykrita.iterdir()) == ['blender_layer', 'blender_layer.desktop'], list(pykrita.iterdir()))
 
 def runUpdate(apiUrl, install=True):
     result = {}

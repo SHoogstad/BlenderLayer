@@ -36,12 +36,10 @@ if QT6:
     from PyQt6.QtCore import *
     from PyQt6.QtGui import *
     from PyQt6.QtWidgets import *
-    from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 else:
     from PyQt5.QtCore import *  # type: ignore
     from PyQt5.QtGui import *  # type: ignore
     from PyQt5.QtWidgets import *  # type: ignore
-    from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest  # type: ignore
 
 
 def eventPos(event):

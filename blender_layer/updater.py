@@ -4,9 +4,9 @@ A release must have a tag "v<major>.<minor>.<patch>" and a .zip asset built by s
 The asset is verified against the sha256 digest GitHub reports for it before anything is written.
 """
 
-import hashlib, io, json, os, re, shutil, tempfile, zipfile
+import hashlib, importlib, io, json, os, re, shutil, tempfile, zipfile
 
-from .qt import QObject, QUrl, pyqtSignal, QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from .qt import QObject, QUrl, pyqtSignal, binding
 from .version import __version__
 
 API_URL = os.environ.get('BLENDER_LAYER_UPDATE_URL', 'https://api.github.com/repos/SHoogstad/BlenderLayer')
@@ -32,6 +32,7 @@ class Updater(QObject):
         self.checked = False
         self.restartRequired = False
         self.busy = False
+        self.qtnet = None
         self.net = None
         self.reply = None
         self.callback = None
@@ -51,12 +52,24 @@ class Updater(QObject):
         self._get(self.latest['url'], self._onPackage)
 
     def _get(self, url, callback):
+        try:
+            self._startRequest(url, callback)
+        except Exception as e:
+            # E.g. a Krita build without QtNetwork, the plugin keeps working without updates
+            self.busy = False
+            self.failed.emit(str(e))
+
+    def _startRequest(self, url, callback):
         if self.net is None:
-            self.net = QNetworkAccessManager(self)
+            # Imported on first use so a missing QtNetwork can't keep the plugin from loading
+            self.qtnet = importlib.import_module(f'{binding}.QtNetwork')
+            self.net = self.qtnet.QNetworkAccessManager(self)
+        QNetworkRequest = self.qtnet.QNetworkRequest
         request = QNetworkRequest(QUrl(url))
         request.setRawHeader(b'User-Agent', b'BlenderLayer-Krita-Plugin')
         request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute, QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
-        request.setTransferTimeout(60000)
+        if hasattr(request, 'setTransferTimeout'):  # Qt 5.15+
+            request.setTransferTimeout(60000)
         # One request at a time (see busy). The slot is a bound method on purpose: a lambda holding the
         # reply is released while the reply is being deleted, which crashes PyQt5 on Python 3.10 (Krita 5.2)
         self.callback = callback
@@ -67,8 +80,8 @@ class Updater(QObject):
         reply, callback = self.reply, self.callback
         self.reply = self.callback = None
         try:
-            if reply.error() != QNetworkReply.NetworkError.NoError:
-                status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+            if reply.error() != self.qtnet.QNetworkReply.NetworkError.NoError:
+                status = reply.attribute(self.qtnet.QNetworkRequest.Attribute.HttpStatusCodeAttribute)
                 if status == 404 and callback == self._onReleaseInfo:
                     raise RuntimeError(i18n("No release published yet"))
                 raise RuntimeError(reply.errorString())
@@ -108,16 +121,38 @@ class Updater(QObject):
                     raise RuntimeError(i18n("Unexpected file in package: {0}").format(name))
             if PACKAGE + '/__init__.py' not in names:
                 raise RuntimeError(i18n("Package does not contain the plugin"))
-            with tempfile.TemporaryDirectory() as temp:
-                archive.extractall(temp)
-                shutil.copytree(os.path.join(temp, PACKAGE), self.pluginDir, dirs_exist_ok=True)
-                desktop = os.path.join(temp, PACKAGE + '.desktop')
-                if os.path.isfile(desktop):
-                    shutil.copy(desktop, os.path.join(os.path.dirname(self.pluginDir), PACKAGE + '.desktop'))
+            self._replacePlugin(archive)
         self.busy = False
         self.restartRequired = True
         self.currentVersion = self.latest['tag']
         self.installed.emit(self.latest['tag'])
+
+    def _replacePlugin(self, archive):
+        """Swaps the plugin folder for the new one with renames, so a failure leaves either the old or
+        the new version complete, and files dropped from the new release don't linger"""
+        pluginDir = os.path.abspath(self.pluginDir)
+        pykrita = os.path.dirname(pluginDir)
+        # A symlink or junction (e.g. to a git checkout) would be replaced by a plain folder
+        if os.path.normcase(os.path.realpath(pluginDir)) != os.path.normcase(os.path.join(os.path.realpath(pykrita), os.path.basename(pluginDir))):
+            raise RuntimeError(i18n("The plugin folder is a link, update it manually"))
+        # Staged next to the plugin so the renames stay on one drive
+        temp = tempfile.mkdtemp(prefix='.' + PACKAGE + '_update_', dir=pykrita)
+        try:
+            archive.extractall(temp)
+            old = os.path.join(temp, 'old')
+            if os.path.exists(pluginDir):
+                os.replace(pluginDir, old)
+            try:
+                os.replace(os.path.join(temp, PACKAGE), pluginDir)
+            except Exception:
+                if os.path.exists(old):
+                    os.replace(old, pluginDir)
+                raise
+            desktop = os.path.join(temp, PACKAGE + '.desktop')
+            if os.path.isfile(desktop):
+                os.replace(desktop, os.path.join(pykrita, PACKAGE + '.desktop'))
+        finally:
+            shutil.rmtree(temp, ignore_errors=True)
 
 _updater = None
 
