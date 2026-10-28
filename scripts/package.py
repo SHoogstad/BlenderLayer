@@ -7,7 +7,7 @@ pykrita folder and in "Tools > Scripts > Import Python Plugin from File...".
     python scripts/package.py check-tag v1.0.0  fail if the tag does not match the plugin version
 """
 
-import re
+import runpy
 import sys
 from pathlib import Path
 from shutil import copy, copytree, ignore_patterns, make_archive, rmtree
@@ -17,8 +17,10 @@ plugin = 'blender_layer'
 
 
 def readVersion():
-    text = (root / plugin / 'version.py').read_text(encoding='utf-8')
-    return re.search(r"__version__ = '([^']+)'", text).group(1)
+    version = runpy.run_path(str(root / plugin / 'version.py'))
+    if version['parseVersion'](version['__version__']) is None:
+        sys.exit(f"Version {version['__version__']} in {plugin}/version.py must be <major>.<minor>.<patch>, the auto-updater ignores anything else")
+    return version['__version__']
 
 
 def build():

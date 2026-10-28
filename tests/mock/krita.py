@@ -53,7 +53,7 @@ class Node:
 
     def setPixelData(self, data, x, y, w, h):
         assert isinstance(data, QByteArray), type(data)
-        self.writes.append((len(data.data()), x, y, w, h))
+        self.writes.append((len(data.data()), x, y, w, h, data.data()[:4]))
         return True
 
     def selection(self): return self.selectionValue

@@ -42,6 +42,14 @@ else:
     from PyQt5.QtWidgets import *  # type: ignore
 
 
+def imageBytes(image):
+    """Pixels of a QImage as QByteArray. Not copied on PyQt5, PyQt6 has no fromRawData and copies once.
+    The image must outlive the result."""
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    return QByteArray(bits) if QT6 else QByteArray.fromRawData(bits)
+
+
 def eventPos(event):
     """Position of a mouse event relative to the receiving widget, as QPointF"""
     return event.position() if QT6 else event.localPos()

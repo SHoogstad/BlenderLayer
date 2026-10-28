@@ -4,24 +4,21 @@ A release must have a tag "v<major>.<minor>.<patch>" and a .zip asset built by s
 The asset is verified against the sha256 digest GitHub reports for it before anything is written.
 """
 
-import hashlib, importlib, io, json, os, re, shutil, tempfile, zipfile
+import hashlib, importlib, io, json, os, shutil, tempfile, zipfile
 
 from .qt import QObject, QUrl, pyqtSignal, binding
-from .version import __version__
+from .version import __version__, parseVersion
 
 API_URL = os.environ.get('BLENDER_LAYER_UPDATE_URL', 'https://api.github.com/repos/SHoogstad/BlenderLayer')
 PACKAGE = 'blender_layer'
-
-def parseVersion(tag):
-    m = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', tag.strip())
-    return tuple(int(x) for x in m.groups()) if m else None
 
 class Updater(QObject):
     checking = pyqtSignal()
     available = pyqtSignal(str)
     upToDate = pyqtSignal()
     installed = pyqtSignal(str)
-    failed = pyqtSignal(str)
+    failed = pyqtSignal(str)  # checking for updates failed
+    installFailed = pyqtSignal(str)
 
     def __init__(self, pluginDir=None, apiUrl=None):
         super().__init__()
@@ -56,8 +53,7 @@ class Updater(QObject):
             self._startRequest(url, callback)
         except Exception as e:
             # E.g. a Krita build without QtNetwork, the plugin keeps working without updates
-            self.busy = False
-            self.failed.emit(str(e))
+            self._fail(callback, e)
 
     def _startRequest(self, url, callback):
         if self.net is None:
@@ -87,10 +83,13 @@ class Updater(QObject):
                 raise RuntimeError(reply.errorString())
             callback(reply.readAll().data())
         except Exception as e:
-            self.busy = False
-            self.failed.emit(str(e))
+            self._fail(callback, e)
         finally:
             reply.deleteLater()
+
+    def _fail(self, callback, error):
+        self.busy = False
+        (self.installFailed if callback == self._onPackage else self.failed).emit(str(error))
 
     def _onReleaseInfo(self, data):
         release = json.loads(data)

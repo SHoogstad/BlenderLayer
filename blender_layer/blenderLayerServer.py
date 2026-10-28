@@ -1,6 +1,6 @@
 import subprocess, time, socket, sys, math, struct, pickle, errno  
 from multiprocessing import shared_memory, SimpleQueue
-from .qt import QRunnable, QObject, pyqtSignal, QByteArray, QImage
+from .qt import QRunnable, QObject, pyqtSignal, QByteArray, QImage, imageBytes
 
 def sendObj(conn, obj):
     msg = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
@@ -228,7 +228,7 @@ class BlenderLayerServer(QRunnable):
                                                     if x > 0 or y > 0 or w < d.width() or h < d.height():
                                                         l.setPixelData(QByteArray(bytes(d.width() * d.height() * 4)), 0, 0, d.width(), d.height())
 
-                                                l.setPixelData(QByteArray(bits.asstring(frame.sizeInBytes())), x, y, w, h)
+                                                l.setPixelData(imageBytes(frame), x, y, w, h)
                                                 if locked:
                                                     refresh = True
                                                 else:

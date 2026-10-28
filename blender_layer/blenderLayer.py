@@ -504,7 +504,7 @@ class BlenderLayer(DockWidget):
         updater = getUpdater()
         updater.available.connect(self.onUpdateAvailable)
         updater.installed.connect(self.onUpdateInstalled)
-        updater.failed.connect(self.onUpdateFailed)
+        updater.installFailed.connect(self.onUpdateFailed)
         updateNoticeButton.clicked.connect(self.installUpdate)
         if updater.restartRequired:
             self.onUpdateInstalled(updater.currentVersion)
@@ -530,10 +530,9 @@ class BlenderLayer(DockWidget):
         self.updateNotice.show()
 
     def onUpdateFailed(self, error):
-        # Failed checks at startup stay silent, only a failed install the user started is shown
-        if self.updateNotice.isVisibleTo(self):
-            self.updateNoticeLabel.setText(i18n("Update failed: {0}").format(error))
-            self.updateNoticeButton.setEnabled(True)
+        # Only installs are reported here, failed checks at startup stay silent
+        self.updateNoticeLabel.setText(i18n("Update failed: {0}").format(error))
+        self.updateNoticeButton.setEnabled(True)
 
     def createActions(self):
         if not self.createdActions:
@@ -843,6 +842,7 @@ class BlenderLayer(DockWidget):
             (updater.available, lambda tag: updateStatusLabel.setText(i18n("Version {0} is available, install it from the docker").format(tag))),
             (updater.installed, lambda tag: updateStatusLabel.setText(i18n("Updated to {0}. Restart Krita to use the new version").format(tag))),
             (updater.failed, lambda error: updateStatusLabel.setText(i18n("Update check failed: {0}").format(error))),
+            (updater.installFailed, lambda error: updateStatusLabel.setText(i18n("Update failed: {0}").format(error))),
         ]
         for signal, slot in updaterSlots:
             signal.connect(slot)
