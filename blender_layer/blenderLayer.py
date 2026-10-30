@@ -1386,8 +1386,12 @@ class BlenderLayer(DockWidget):
 
         name = fileName
         if name and self.settings.relPath and self.activeInFile:
-            name = os.path.relpath(name, os.path.dirname(self.activeInFile))
-            
+            try:
+                name = os.path.relpath(name, os.path.dirname(self.activeInFile))
+            except ValueError:
+                # Different drive or network share, keep the absolute path
+                pass
+
         if len(l.childNodes()) == 0:
             l2 = d.createSelectionMask(name)
             s = Selection()
