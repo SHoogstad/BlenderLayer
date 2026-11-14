@@ -64,10 +64,14 @@ class BlenderLayerClient():
         self.shm = None
         self.buf = []
         self.offscreen = None
+        self.host = HOST
+        self.port = PORT
 
     def connect(self, host, port):
         HOST = host
         PORT = port
+        self.host = host
+        self.port = port
         MAGIC = b'BLENDER_LAYER_V1'
         
         self.disconnect()
@@ -149,6 +153,7 @@ class BlenderLayerClient():
                 self.tagForRedraw()
                 showMessageBox('Connected')
             print('[Blender Layer] Connected')
+            showConnectionState()
             return True
         except Exception as e:
             self.disconnect()
@@ -205,6 +210,7 @@ class BlenderLayerClient():
            
         if not atexit:
             self.freeOffscreen()
+            showConnectionState()
 
         print('[Blender Layer] Disconnected') 
 
@@ -226,10 +232,7 @@ class BlenderLayerClient():
                     self.revertRenderSettings()
             else:
                 self.sendMessage(('renderProgress', 1, 0, 1))
-                path = bpy.context.scene.render.filepath
-                if bpy.context.scene.render.use_file_extension:
-                    path = path + bpy.context.scene.render.file_extension
-                self.sendMessage(('updateFromFile', x, y, path))
+                self.sendMessage(('updateFromFile', x, y, self.stillRenderPath(bpy.context.scene.render)))
                 self.isRendering = False
                 self.revertRenderSettings()
      
@@ -241,6 +244,17 @@ class BlenderLayerClient():
             self.isAnimation = False
             self.revertRenderSettings()
      
+    def stillRenderPath(self, render):
+        """Absolute path of the file Blender wrote for a still render. Krita can't resolve the output path itself:
+        '//' is relative to the .blend, and on Windows Blender puts a path without a drive (like the default
+        '/tmp/') on the Windows drive, while Krita would use the drive it was started from"""
+        path = bpy.path.abspath(render.filepath)
+        if os.name == 'nt' and not os.path.splitdrive(path)[0]:
+            path = os.environ.get('SystemRoot', 'C:\\Windows')[:2] + '\\' + path.lstrip('\\/')
+        if render.use_file_extension:
+            path = bpy.path.ensure_ext(path, render.file_extension)
+        return os.path.normpath(path)
+
     def revertRenderSettings(self):
         scene = bpy.context.scene
         render = scene.render
@@ -312,13 +326,24 @@ class BlenderLayerClient():
             self.sendMessage(('poselib', poselib, clear))
         
     def getPosePreview(self, action):
-        return np.array(action.preview.image_pixels, copy=False).ravel(order = 'F').reshape(128, 128)[::-1,:].ravel().tobytes()
+        """128x128 RGBA8 bytes of the action's preview, None without one"""
+        preview = action.preview
+        w, h = preview.image_size if preview else (0, 0)
+        if w <= 0 or h <= 0:
+            return None
+        # One packed RGBA pixel per int32. Not np.array(copy=False), which raises on NumPy 2 (Blender 5.2),
+        # and the dtype matters: NumPy 2 defaults to int64 on Windows, which would double every pixel
+        pixels = np.asarray(preview.image_pixels, dtype=np.int32).reshape(h, w)[::-1]
+        if (w, h) != (128, 128):  # the docker shows 128x128 previews
+            pixels = pixels[np.arange(128) * h // 128][:, np.arange(128) * w // 128]
+        return pixels.tobytes()
         
     def sendMessage(self, msg):
         self.sendQueue.put(msg)
       
     def tagForRedraw(self):
-        for area in bpy.context.screen.areas:
+        # All windows: after a render the active one can be the render window, which has no 3D View
+        for area in (a for w in bpy.context.window_manager.windows for a in w.screen.areas):
             if area.type == 'VIEW_3D':
                 for region in area.regions:
                     if region.type == 'WINDOW':
@@ -333,6 +358,13 @@ class BlenderLayerClient():
             print(e)
         self.buf = []
         self.offscreen = None
+        # A frame that was drawn but not sent yet is now dropped as outdated, and in Auto and Manual mode nothing
+        # asked for another one: right after connecting, when the first update frees the offscreen, Krita could stay
+        # without a picture. Draw it again. Not while exporting an animation or rendering, which recover on their
+        # own, and where a live frame would overwrite an animation frame or the render result
+        if self.updateFlag and self.connected and not self.isAnimation and not self.isRendering:
+            self.requestFrame = True
+            self.tagForRedraw()
 
     def onUpdate(self):    
         if self.requestDisconnect:
@@ -461,6 +493,12 @@ class BlenderLayerClient():
                             action.flip_with_pose(obj)
                         obj.animation_data_create()
                         obj.animation_data.action = action
+                        # Blender 4.4+ slotted actions: a pose made on another armature isn't auto-assigned a slot,
+                        # leaving the pose unapplied, so fall back to the action's object slot
+                        if getattr(obj.animation_data, 'action_slot', True) is None:
+                            slots = [s for s in action.slots if s.target_id_type in ('OBJECT', 'UNSPECIFIED')]
+                            if slots:
+                                obj.animation_data.action_slot = slots[0]
                         self.requestDelayedFrame = True
                         self.sendMessage(('status', f"Applied pose {msg[2]}"))
                     else:
@@ -485,7 +523,11 @@ class BlenderLayerClient():
                     self.sendMessage(('posePreviews', previews))
                 elif type == 'append':
                     objects = msg[3].split(';')
-                    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+                    # mode_set fails when nothing is active, e.g. after deleting the default cube
+                    if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+                        bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+                    oldObjects = set(bpy.data.objects)
+                    oldTexts = set(bpy.data.texts)
 
                     for obj in objects:
                         path = os.path.join(msg[2], obj)
@@ -494,19 +536,27 @@ class BlenderLayerClient():
                         bpy.ops.wm.append(filepath=path, directory=directory, filename=base, autoselect=False, active_collection=False)
                         
                     if msg[1] == 'Body-chan' or msg[1] == 'Body-kun':
+                        # Only look at what this append added, the scene may have rigs and rig UI scripts of its own
                         armature = None
+                        viewLayerObjects = bpy.context.view_layer.objects  # also brings the view layer up to date
                         for obj in bpy.data.objects:
-                            if 'WGT' in obj.name:
-                                obj.hide_set(True)
+                            if obj in oldObjects:
+                                continue
+                            if 'WGT' in obj.name and obj.name in viewLayerObjects:
+                                try:
+                                    obj.hide_set(True)
+                                except RuntimeError as e:  # not in the view layer, so it isn't shown anyway
+                                    print('[Blender Layer]', e)
                             if obj.type == 'MESH':
                                 for m in obj.modifiers:
                                     if m.type == 'ARMATURE' and m.object:
                                         armature = m.object
                         for txt in bpy.data.texts:
-                            if 'rig_ui' in txt.name:
+                            if txt not in oldTexts and 'rig_ui' in txt.name:
                                 txt.as_module()
-                        bpy.context.view_layer.objects.active = armature
-                        bpy.ops.object.mode_set(mode='POSE', toggle=False)
+                        if armature:
+                            bpy.context.view_layer.objects.active = armature
+                            bpy.ops.object.mode_set(mode='POSE', toggle=False)
 
                     self.updatePoseLib()
                     self.requestDelayedFrame = True
@@ -631,6 +681,8 @@ class BlenderLayerClient():
                     self.updateMode = 2
                         
                     self.sendMessage(('updateAnimation', msg[3], fps, self.animStart, self.animEnd, self.animSteps))
+                    # When the scene already is on the first frame nothing else triggers the draw
+                    self.tagForRedraw()
                 elif type == 'requestFrame':
                     self.requestFrame = True
                     region.tag_redraw()                        
@@ -715,7 +767,7 @@ class BlenderLayerClient():
             self.prevShading = shading
             self.prevEngine = engine
             
-            if self.requestFrame or self.updateMode == 0:
+            if self.requestFrame or self.updateMode == 0 or self.isAnimation and not self.isRendering:
                 self.ticksWaitingForFrame = self.ticksWaitingForFrame + 1
                 if self.ticksWaitingForFrame == 60:
                     self.tagForRedraw()
@@ -739,21 +791,55 @@ class BlenderLayerClient():
         if self.connected and not self.backgroundDraw:
             self.draw(self.active_space, self.active_region)
             
+    def drainSendQueue(self, msgs):
+        """Move the queued messages to msgs, keeping only the newest of consecutive messages of a type"""
+        lastType = None
+        while not self.sendQueue.empty():
+            msg = self.sendQueue.get()
+            type = msg[0]
+            if type == lastType:
+                if type == 'posePreviews':
+                    msg[1].extend(msgs[-1][1])
+                msgs[-1] = msg
+            else:
+                msgs.append(msg)
+            lastType = type
+
     def sendData(self):
         try:
             while self.connected:
                 msgs = []
+                # Messages queued before the frame was drawn go first. The first frame of an animation update
+                # overtook 'updateAnimation' otherwise, and Krita, which clears the frame range when it gets that,
+                # deleted the frame it had just received
+                frameReady = self.updateFlag
+                self.drainSendQueue(msgs)
 
-                if self.updateFlag:
-                    self.updateFlag = False
-                    
+                if frameReady and self.updateFlag:
                     scale = self.scale
                     x = self.regionX
                     y = self.regionY
                     h = self.regionHeight // scale
                     w = self.regionWidth // scale
-                    if len(self.buf) == h and len(self.buf[0]) == w:
-                        b = np.array(self.buf, copy=False, dtype=self.dtype).ravel(order = 'F')
+                    buf = self.buf
+                    sizeOk = len(buf) == h and len(buf[0]) == w
+                    frame = None
+                    if sizeOk and self.isAnimation and not self.isRendering:
+                        # Claim the animation frame before clearing the flag: a redraw during the conversion below
+                        # captured this frame again otherwise, which then went to Krita as the next frame
+                        frame = self.animFrame
+                        self.animFrame = frame + self.animSteps
+                        if self.animFrame > self.animEnd:
+                            self.isAnimation = False
+                    self.updateFlag = False
+                    if sizeOk:
+                        # Read the raw texels, which are row-major in every Blender version. The strides the
+                        # buffer reports changed (Fortran order before, C order in Blender 5), so converting the
+                        # buffer object itself scrambles the frame on one or the other
+                        b = np.frombuffer(buf, dtype=np.uint8)
+                        if b.size == h * w * 4 * 4:  # float formats (RGBA16F/RGBA32F) are read back as float32
+                            b = b.view(np.float32)
+                        b = b.astype(self.dtype, copy=False)
                         if self.bgrConversion:
                             b = b.reshape(h, w, 4)[::-1,:,[2, 1, 0, 3]]
                         else:
@@ -762,15 +848,10 @@ class BlenderLayerClient():
                             b = b.repeat(scale, axis=0).repeat(scale, axis=1)
                         b = b.ravel().tobytes()
                         type = 'update'
-                        frame = None
-                        if self.isAnimation and not self.isRendering:
+                        if frame is not None:
                             type = 'updateFrame'
-                            frame = self.animFrame
-                            self.sendMessage(('updateProgress', self.animFrame, self.animStart, self.animEnd))
-                            self.animFrame = self.animFrame + self.animSteps
-                            if self.animFrame > self.animEnd:
-                                self.isAnimation = False
-                                self.updateFlag = False
+                            self.sendMessage(('updateProgress', frame, self.animStart, self.animEnd))
+                            if not self.isAnimation:
                                 self.sendMessage(('updateProgress', self.animEnd, self.animStart, self.animEnd))
                         if self.sharedMem:
                             self.shm.buf[:len(b)] = b
@@ -780,22 +861,13 @@ class BlenderLayerClient():
                     else:
                         print("[Blender Layer] Warning: Ignorig frame with outdated dimensions")
 
-                lastType = None
-                while not self.sendQueue.empty():
-                    msg = self.sendQueue.get()
-                    type = msg[0]
-                    if type == lastType:
-                        if type == 'posePreviews':
-                            msg[1].extend(msgs[-1][1])
-                        msgs[-1] = msg
-                    else:
-                        msgs.append(msg)
-                    lastType = type
+                self.drainSendQueue(msgs)
 
                 if not self.connected:
                     break
                   
                 sendObj(self.s, msgs)
+                idle = not msgs
                 
                 if not self.connected:
                     break
@@ -807,7 +879,10 @@ class BlenderLayerClient():
                     for msg in msgs:
                         self.recvQueue.put(msg)
 
-                #time.sleep(0.333)
+                # Nothing went either way: wait a moment instead of spinning through thousands of empty
+                # round trips per second, which keeps a CPU core busy in both Blender and Krita
+                if idle and not msgs:
+                    time.sleep(0.005)
         except Exception as e:
             print("[Blender Layer] Exception while communicating with Krita")
             print(e)                     
@@ -937,6 +1012,54 @@ class ConnectOperator(bpy.types.Operator):
             row.prop(self, "host")
             row.prop(self, "port")     
         
+def showConnectionState():
+    """Redraw the 3D Views, so that the Krita tab of their sidebar shows whether Blender is connected"""
+    try:
+        for area in (a for w in bpy.context.window_manager.windows for a in w.screen.areas):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+    except Exception:
+        pass  # Blender is still starting, nothing is drawn yet
+
+def drawConnection(layout):
+    """Whether Blender is connected, and a button to connect or disconnect"""
+    if client and client.connected:
+        layout.label(text=f"Connected to Krita, port {client.port}", icon='LINKED')
+        layout.operator(ConnectOperator.bl_idname, text="Disconnect", icon='UNLINKED')
+    else:
+        layout.label(text="Not connected", icon='UNLINKED')
+        layout.operator(ConnectOperator.bl_idname, text="Connect to Krita", icon='LINKED')
+
+# A Krita tab in the sidebar (N) of the 3D View, next to the other add-ons' tabs: easier to find than the entry in
+# the View menu of the 3D View's header
+class ConnectPanel(bpy.types.Panel):
+    """Connect this Blender to the Blender Layer docker in Krita"""
+    bl_idname = 'VIEW3D_PT_connect_krita'
+    bl_label = "Blender Layer"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Krita"
+
+    def draw(self, context):
+        drawConnection(self.layout)
+        if not (client and client.connected):
+            col = self.layout.column(align=True)
+            col.label(text="First click Start Server in")
+            col.label(text="Krita's Blender Layer docker")
+
+# The same button in the add-on's entry in Preferences > Add-ons
+class ConnectPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+
+    def draw(self, context):
+        drawConnection(self.layout)
+        col = self.layout.column(align=True)
+        col.label(text="Also in every 3D View: the Krita tab of the sidebar (N),")
+        col.label(text="and View > Connect to Krita in the 3D View's header")
+
+# Enabled in Preferences > Add-ons, rather than run by Krita with --python
+asAddon = __name__ != '__main__'
+
 def menu_func(self, context):
     self.layout.operator(ConnectOperator.bl_idname, text="Connect to Krita")
 
@@ -947,6 +1070,9 @@ def register():
     client = BlenderLayerClient()  
     
     bpy.utils.register_class(ConnectOperator)
+    bpy.utils.register_class(ConnectPanel)
+    if asAddon:
+        bpy.utils.register_class(ConnectPreferences)
     bpy.types.VIEW3D_MT_view.append(menu_func)
 
     if CONNECT:
@@ -954,6 +1080,11 @@ def register():
       
 def unregister():  
     global client  
+    # Take the menu entry out too: disabling and enabling the add-on again added a second one
+    bpy.types.VIEW3D_MT_view.remove(menu_func)
+    if asAddon:
+        bpy.utils.unregister_class(ConnectPreferences)
+    bpy.utils.unregister_class(ConnectPanel)
     bpy.utils.unregister_class(ConnectOperator)
     if client:
         client.disconnect()
