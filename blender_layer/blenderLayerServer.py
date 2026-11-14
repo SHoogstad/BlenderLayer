@@ -263,8 +263,10 @@ class BlenderLayerServer(QRunnable):
                                     l.setLocked(False)
 
                                     if not l.animated():
-                                        l.enableAnimation()                               
-                                        l.setPinnedToTimeline(True)
+                                        l.enableAnimation()
+                                        # Node.setPinnedToTimeline was removed in Krita 5.3
+                                        if hasattr(l, 'setPinnedToTimeline'):
+                                            l.setPinnedToTimeline(True)
                                         
                                     #for t in range(start, end + 1):
                                     #    d.setCurrentTime(start)

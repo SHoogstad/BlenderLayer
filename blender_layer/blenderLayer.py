@@ -933,7 +933,9 @@ class BlenderLayer(DockWidget):
     def startBlender(self, ignored = False, file = ''):   
         if not instance.activeDocument():
             return
-        if self.blenderRunning:
+        # Also check the connection: blender-launcher.exe (e.g. Steam's Blender) exits right after starting
+        # Blender, so blenderRunning is already False again while that Blender is still connected
+        if self.blenderRunning or self.connected:
             if file and self.server and self.server.running:
                 self.server.sendMessage(('file', file))
             return
@@ -1001,6 +1003,7 @@ class BlenderLayer(DockWidget):
             self.saveRegionToLayer()
         
     def onServerConnected(self, connected, info):
+        self.connected = connected
         self.viewGroup.setEnabled(connected)
         self.libraryGroup.setEnabled(connected)
         self.setLayoutEnabled(self.updateButtonLayout, connected)
@@ -1033,11 +1036,23 @@ class BlenderLayer(DockWidget):
         if type == 'poselib':
             self.updatePoseLibrary(msg[1], msg[2])
         elif type == 'armatures':
+            # Refilling the list resets the choice to its first rig, so a pose meant for one rig silently went to
+            # another (after "Add to scene" the scene's own first rig, not the added Body-chan). Keep the chosen
+            # rig, and choose a rig that was just added, or the new name of the chosen one
+            previous = [self.poseArmatures.itemText(i) for i in range(self.poseArmatures.count())]
+            current = self.poseArmatures.currentText()
+            names = list(msg[1])
             self.poseArmatures.clear()
-            if len(msg[1]) == 0:
+            if len(names) == 0:
                 self.poseArmatures.addItems([i18n("<None>")])
             else:
-                self.poseArmatures.addItems(msg[1])
+                self.poseArmatures.addItems(names)
+                added = [a for a in names if a not in previous]
+                sameScene = any(a in names for a in previous)
+                if added and sameScene and (len(names) > len(previous) or current not in names):
+                    self.poseArmatures.setCurrentText(added[-1])
+                elif current in names:
+                    self.poseArmatures.setCurrentText(current)
         elif type == 'posePreviews':
             for (name, pixels) in msg[1]:
                 self.loadPosePreview(name, pixels)
